@@ -928,3 +928,69 @@ async def vassal_power(vassal_id: int) -> int:
                 elif a["tier"] == "C":
                     power += 25
         return power
+
+
+# ── O'yin bazasini tozalash ───────────────────────────────────────────────────
+
+async def reset_all_users_for_new_game() -> list:
+    """
+    Barcha foydalanuvchilarni yangi o'yin uchun reset qiladi.
+
+    - Foydalanuvchilar (admindan tashqari) kingdom_id, vassal_id = NULL,
+      role = 'member', gold = 0, last_farm = NULL ga qaytariladi.
+    - Qirolliklar: king_id = NULL, resurslar = 0.
+    - Vassallar: lord_id = NULL, resurslar = 0.
+    - queue_state: phase=1, current_vassal_index=0.
+    - O'yin tarixi jadvallari tozalanadi (wars, diplomacy, artifacts va h.k.).
+
+    Qaytaradi: xabar yuborish kerak bo'lgan telegram_id lar ro'yxati.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Barcha foydalanuvchilar ID larini oldindan saqlab qo'yamiz
+        rows = await conn.fetch(
+            "SELECT telegram_id FROM users WHERE role != 'admin'"
+        )
+        telegram_ids = [r["telegram_id"] for r in rows]
+
+        # Foydalanuvchilarni reset (adminlar saqlanadi)
+        await conn.execute("""
+            UPDATE users
+            SET kingdom_id = NULL,
+                vassal_id  = NULL,
+                role       = 'member',
+                gold       = 0,
+                last_farm  = NULL
+            WHERE role != 'admin'
+        """)
+
+        # Qirolliklar: taxtlar bo'shatiladi, resurslar nolga tushadi
+        await conn.execute(
+            "UPDATE kingdoms SET king_id=NULL, gold=0, soldiers=0, dragons=0"
+        )
+
+        # Vassallar: lordlar ozod qilinadi, resurslar nolga tushadi
+        await conn.execute(
+            "UPDATE vassals SET lord_id=NULL, gold=0, soldiers=0"
+        )
+
+        # Navbat holati qayta boshidan
+        await conn.execute(
+            "UPDATE queue_state SET phase=1, current_vassal_index=0 WHERE id=1"
+        )
+
+        # O'yin tarixi jadvallarini tozalash
+        await conn.execute("DELETE FROM war_support")
+        await conn.execute("DELETE FROM tributes")
+        await conn.execute("DELETE FROM wars")
+        await conn.execute("DELETE FROM diplomacy")
+        await conn.execute("DELETE FROM elections")
+        await conn.execute("DELETE FROM artifacts")
+        await conn.execute("DELETE FROM assassination_hits")
+        await conn.execute("DELETE FROM claim_wars")
+        await conn.execute("DELETE FROM claim_responses")
+        await conn.execute("DELETE FROM claims")
+        await conn.execute("DELETE FROM loans")
+        await conn.execute("DELETE FROM chronicles")
+
+    return telegram_ids
