@@ -373,19 +373,19 @@ async def delete_artifact(artifact_id: int):
 
 
 async def get_kingdom_ruler_vassal(kingdom_id: int):
-    """Qirollikning hukmdor vassalini qaytaradi (king_id orqali)"""
+    """Qirollikning hukmdor vassalini qaytaradi — eng kuchli vassal (soldiers + artifact)"""
+    return await get_strongest_vassal_in_kingdom(kingdom_id)
+
+
+async def get_vassal_lord_user(vassal_id: int):
+    """Vassalning lord foydalanuvchisini topish (vassals.lord_id orqali)"""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        kingdom = await conn.fetchrow(
-            "SELECT * FROM kingdoms WHERE id=$1", kingdom_id
-        )
-        if not kingdom or not kingdom["king_id"]:
+        vassal = await conn.fetchrow("SELECT * FROM vassals WHERE id=$1", vassal_id)
+        if not vassal or not vassal.get("lord_id"):
             return None
-        # king_id — foydalanuvchi telegram_id, u lord bo'lgan vassalni topamiz
         return await conn.fetchrow(
-            "SELECT v.* FROM vassals v JOIN users u ON u.vassal_id = v.id "
-            "WHERE u.telegram_id = $1 AND v.kingdom_id = $2",
-            kingdom["king_id"], kingdom_id
+            "SELECT * FROM users WHERE telegram_id=$1", vassal["lord_id"]
         )
 
 
