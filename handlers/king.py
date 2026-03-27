@@ -17,7 +17,6 @@ from keyboards.kb import (
     king_main_kb, diplomacy_kb, kingdoms_select_kb, vassals_select_kb,
     resource_type_kb, back_kb, diplomacy_respond_kb, order_respond_kb
 )
-from config import PUNISHMENT_SOLDIER_COST
 
 router = Router()
 
@@ -338,77 +337,6 @@ async def msg_resource_amount(message: Message, state: FSMContext, bot: Bot, db_
         f"Resurs talabi",
         f"{kingdom['name']} Qiroli {vassal['name']}dan {amount} {label} talab qildi",
         actor_id=message.from_user.id
-    )
-
-
-# ── Punishment ────────────────────────────────────────────────────────────────
-
-@router.callback_query(F.data == "king_punish")
-async def cb_punish_start(call: CallbackQuery, db_user: dict, state: FSMContext):
-    if not is_king(db_user):
-        await call.answer("👑 Faqat Qirollar uchun!")
-        return
-    kingdom = await get_kingdom_by_king(call.from_user.id)
-    vassals = await get_kingdom_vassals(kingdom["id"])
-    if not vassals:
-        await call.message.edit_text("❌ Vassallar yo'q!", reply_markup=back_kb("king_main"))
-        return
-    await state.set_state(KingStates.waiting_punish_vassal)
-    await call.message.edit_text(
-        f"⚠️ <b>OGOHLANTIRISH</b>\n\nJazo berish {PUNISHMENT_SOLDIER_COST} ta askar sarflaydi "
-        f"va vassal oilani yo'q qiladi!\n\nQaysi vassalni jazolaysiz?",
-        reply_markup=vassals_select_kb(vassals, "punish_vassal")
-    )
-
-
-@router.callback_query(F.data.startswith("punish_vassal_"), KingStates.waiting_punish_vassal)
-async def cb_punish_vassal(call: CallbackQuery, state: FSMContext, db_user: dict, bot: Bot):
-    vassal_id = int(call.data.split("_")[-1])
-    kingdom = await get_kingdom_by_king(call.from_user.id)
-    if kingdom["soldiers"] < PUNISHMENT_SOLDIER_COST:
-        await call.message.edit_text(
-            f"❌ Yetarli qo'shin yo'q! Kerak: {PUNISHMENT_SOLDIER_COST}, Sizda: {kingdom['soldiers']}",
-            reply_markup=back_kb("king_main")
-        )
-        await state.clear()
-        return
-
-    vassal = await get_vassal(vassal_id)
-    # Lord rolini olib tashlash
-    if vassal["lord_id"]:
-        await update_user(vassal["lord_id"], role="member")
-
-    # Deduct soldiers & notify members
-    await update_kingdom(kingdom["id"], soldiers=kingdom["soldiers"] - PUNISHMENT_SOLDIER_COST)
-    members = await get_vassal_members(vassal_id)
-    for m in members:
-        try:
-            await bot.send_message(
-                m["telegram_id"],
-                f"💀 <b>{vassal['name']}</b> oilasi Qirol buyrug'i bilan yo'q qilindi!"
-            )
-        except Exception:
-            pass
-
-    # Remove vassal & reassign members (kingdom ga bog'lab qo'yamiz, vassalsiz)
-    from database.db import get_pool
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE users SET vassal_id=NULL, role='member' WHERE vassal_id=$1",
-            vassal_id
-        )
-        await conn.execute("DELETE FROM vassals WHERE id=$1", vassal_id)
-
-    await state.clear()
-    await call.message.edit_text(
-        f"⚔️ <b>{vassal['name']}</b> oilasi yo'q qilindi! {PUNISHMENT_SOLDIER_COST} askar sarflandi.",
-        reply_markup=king_main_kb()
-    )
-    await add_chronicle(
-        "punishment", "Oila yo'q qilindi",
-        f"{kingdom['name']} Qiroli {vassal['name']} oilasini yo'q qildi",
-        actor_id=call.from_user.id
     )
 
 
