@@ -114,13 +114,13 @@ async def init_db():
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS queue_state (
                 id          INTEGER PRIMARY KEY DEFAULT 1,
-                phase       INTEGER DEFAULT 1,
+                phase       INTEGER DEFAULT 2,
                 current_vassal_index INTEGER DEFAULT 0
             )
         """)
         await conn.execute("""
             INSERT INTO queue_state (id, phase, current_vassal_index)
-            VALUES (1, 1, 0)
+            VALUES (1, 2, 0)
             ON CONFLICT (id) DO NOTHING
         """)
 
