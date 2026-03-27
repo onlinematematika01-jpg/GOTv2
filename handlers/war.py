@@ -18,7 +18,7 @@ from database.queries import (
     get_kingdom_by_king, get_kingdom, get_all_kingdoms,
     update_kingdom, get_kingdom_members, get_vassal_members,
     get_kingdom_vassals, get_vassal, update_vassal,
-    add_chronicle, get_artifacts,
+    add_chronicle, get_artifacts, delete_artifact, get_kingdom_ruler_vassal,
     create_war, get_war, update_war, get_active_war,
     add_war_support, get_war_support, create_tribute, get_active_tributes
 )
@@ -247,23 +247,32 @@ async def cb_war_surrender(call: CallbackQuery, db_user: dict, bot: Bot):
 
 
 async def _process_surrender(bot: Bot, war, attacker, defender):
-    """Taslim bo'lish — resurs o'tkazish + tribute"""
-    # 50% resurs o'tkazish
-    gold_transfer = defender["gold"] // 2
-    soldiers_transfer = defender["soldiers"] // 2
+    """Taslim bo'lish — resurs o'tkazish + tribute (hukmdor vassallar o'rtasida)"""
+    from database.queries import update_user
+    # Hukmdor vassallarni topamiz
+    attacker_ruler = await get_kingdom_ruler_vassal(attacker["id"])
+    defender_ruler = await get_kingdom_ruler_vassal(defender["id"])
 
-    await update_kingdom(attacker["id"],
-        gold=attacker["gold"] + gold_transfer,
-        soldiers=attacker["soldiers"] + soldiers_transfer
-    )
-    await update_kingdom(defender["id"],
-        gold=defender["gold"] - gold_transfer,
-        soldiers=defender["soldiers"] - soldiers_transfer
-    )
+    if defender_ruler:
+        gold_transfer = (defender_ruler["gold"] or 0) // 2
+        soldiers_transfer = (defender_ruler["soldiers"] or 0) // 2
+    else:
+        gold_transfer = 0
+        soldiers_transfer = 0
+
+    if attacker_ruler and gold_transfer > 0:
+        await update_vassal(attacker_ruler["id"],
+            gold=attacker_ruler["gold"] + gold_transfer,
+            soldiers=attacker_ruler["soldiers"] + soldiers_transfer
+        )
+    if defender_ruler and gold_transfer > 0:
+        await update_vassal(defender_ruler["id"],
+            gold=max(0, defender_ruler["gold"] - gold_transfer),
+            soldiers=max(0, defender_ruler["soldiers"] - soldiers_transfer)
+        )
 
     # Qirolni ag'darish
     await update_kingdom(defender["id"], king_id=None)
-    from database.queries import update_user
     await update_user(defender["king_id"], role="member")
 
     # Tribute yoqish
@@ -566,17 +575,37 @@ async def _run_war_rounds(bot: Bot, war_id: int):
         winner, loser = defender, attacker
         winner_state, loser_state = d_state, a_state
 
-    # Resurs o'tkazish
-    gold_transfer = loser["gold"] // 2
-    soldiers_transfer = loser["soldiers"] // 2
-    await update_kingdom(winner["id"],
-        gold=winner["gold"] + gold_transfer,
-        soldiers=winner["soldiers"] + soldiers_transfer
-    )
-    await update_kingdom(loser["id"],
-        gold=loser["gold"] - gold_transfer,
-        soldiers=loser["soldiers"] - soldiers_transfer
-    )
+    # Resurs o'tkazish: hukmdor vassallar o'rtasida
+    winner_ruler = winner_state.get("_ruler_vassal")
+    loser_ruler = loser_state.get("_ruler_vassal")
+
+    if loser_ruler:
+        gold_transfer = (loser_ruler["gold"] or 0) // 2
+        soldiers_transfer = (loser_ruler["soldiers"] or 0) // 2
+    else:
+        gold_transfer = 0
+        soldiers_transfer = 0
+
+    if winner_ruler and gold_transfer > 0:
+        await update_vassal(winner_ruler["id"],
+            gold=winner_ruler["gold"] + gold_transfer,
+            soldiers=winner_ruler["soldiers"] + soldiers_transfer
+        )
+    if loser_ruler and gold_transfer > 0:
+        await update_vassal(loser_ruler["id"],
+            gold=max(0, loser_ruler["gold"] - gold_transfer),
+            soldiers=max(0, loser_ruler["soldiers"] - soldiers_transfer)
+        )
+
+    # Urushda ishlatilgan chayonlar va o'lgan ajdarlarni artifact bazadan o'chirish
+    for side_state in [a_state, d_state]:
+        artifact_ids = side_state.get("_artifact_ids", [])
+        # Ishlatilgan chayonlarni hisoblash (boshlang'ich - qolgan)
+        # _apply_scorpions attacker["scorpions"] ni kamaytiradi, shuning uchun
+        # qolgan scorpion soni state da yangilangan. O'chirishni ID bo'yicha qilamiz.
+        # Barcha chayonlar bir martalik — ishlatilganmi yoki yo'qmi, urushdan keyin o'chiriladi
+        for art_type, art_id in artifact_ids:
+            await delete_artifact(art_id)
 
     # Yutqazgan Qirolni ag'darish
     loser_fresh = await get_kingdom(loser["id"])
@@ -611,33 +640,29 @@ async def _run_war_rounds(bot: Bot, war_id: int):
 
 
 async def _get_kingdom_forces(kingdom: dict, war_id: int = None) -> dict:
-    """Qirollikning barcha kuchlarini hisoblash (war_support ham qo'shiladi)"""
-    # Qirollik artefaktlari
-    arts = await get_artifacts("kingdom", kingdom["id"])
+    """Qirollik kuchi = hukmdor vassalning kuchi (faqat uning askarlari va artefaktlari)"""
     da = db = dc = scorpions = 0
-    for a in arts:
-        if a["artifact"] == "🐉 Ajdar":
-            if a["tier"] == "A": da += 1
-            elif a["tier"] == "B": db += 1
-            elif a["tier"] == "C": dc += 1
-        elif "Chayon" in a["artifact"]:
-            scorpions += 1
+    artifact_ids = []  # o'chirilishi kerak bo'lgan artifact id lar (urushdan keyin)
 
-    # Vassal artefaktlarini ham hisoblash
-    vassals = await get_kingdom_vassals(kingdom["id"])
-    for v in vassals:
-        v_arts = await get_artifacts("vassal", v["id"])
+    # Hukmdor vassalni topamiz
+    ruler_vassal = await get_kingdom_ruler_vassal(kingdom["id"])
+    if ruler_vassal:
+        soldiers = ruler_vassal["soldiers"] or 0
+        v_arts = await get_artifacts("vassal", ruler_vassal["id"])
         for a in v_arts:
             if a["artifact"] == "🐉 Ajdar":
                 if a["tier"] == "A": da += 1
                 elif a["tier"] == "B": db += 1
                 elif a["tier"] == "C": dc += 1
+                artifact_ids.append(("dragon", a["id"]))
             elif "Chayon" in a["artifact"]:
                 scorpions += 1
+                artifact_ids.append(("scorpion", a["id"]))
+    else:
+        # Hukmdor yo'q — 0 kuch
+        soldiers = 0
 
-    soldiers = kingdom["soldiers"]
-
-    # War support dan qo'shimcha resurslar
+    # War support dan qo'shimcha resurslar (vassallardan kelgan yordam)
     if war_id:
         support = await get_war_support(war_id, kingdom["id"])
         if support:
@@ -649,6 +674,8 @@ async def _get_kingdom_forces(kingdom: dict, war_id: int = None) -> dict:
         "soldiers": soldiers,
         "scorpions": scorpions,
         "skipped_a": 0,
+        "_artifact_ids": artifact_ids,  # urushdan keyin o'chirish uchun
+        "_ruler_vassal": ruler_vassal,
     }
 
 
@@ -775,25 +802,32 @@ async def _broadcast(bot: Bot, members: list, text: str):
 # ── Haftalik tribute (scheduler tomonidan chaqiriladi) ───────────────────────
 
 async def process_weekly_tributes(bot: Bot):
-    """Har shanba ishga tushadi"""
+    """Har shanba ishga tushadi — tribute hukmdor vassallar o'rtasida"""
     tributes = await get_active_tributes()
     for t in tributes:
-        loser = await get_kingdom(t["from_kingdom"])
-        winner = await get_kingdom(t["to_kingdom"])
-        if not loser or not winner:
+        loser_k = await get_kingdom(t["from_kingdom"])
+        winner_k = await get_kingdom(t["to_kingdom"])
+        if not loser_k or not winner_k:
             continue
-        tribute_gold = loser["gold"] * t["percent"] // 100
-        tribute_soldiers = loser["soldiers"] * t["percent"] // 100
+        loser_ruler = await get_kingdom_ruler_vassal(loser_k["id"])
+        winner_ruler = await get_kingdom_ruler_vassal(winner_k["id"])
+        if not loser_ruler:
+            continue
+        tribute_gold = (loser_ruler["gold"] or 0) * 10 // 100
+        tribute_soldiers = (loser_ruler["soldiers"] or 0) * 10 // 100
         if tribute_gold <= 0 and tribute_soldiers <= 0:
             continue
-        await update_kingdom(loser["id"],
-            gold=loser["gold"] - tribute_gold,
-            soldiers=loser["soldiers"] - tribute_soldiers
+        await update_vassal(loser_ruler["id"],
+            gold=max(0, loser_ruler["gold"] - tribute_gold),
+            soldiers=max(0, loser_ruler["soldiers"] - tribute_soldiers)
         )
-        await update_kingdom(winner["id"],
-            gold=winner["gold"] + tribute_gold,
-            soldiers=winner["soldiers"] + tribute_soldiers
-        )
+        if winner_ruler:
+            await update_vassal(winner_ruler["id"],
+                gold=winner_ruler["gold"] + tribute_gold,
+                soldiers=winner_ruler["soldiers"] + tribute_soldiers
+            )
+        loser = loser_k
+        winner = winner_k
         members = (
             await get_kingdom_members(loser["id"]) +
             await get_kingdom_members(winner["id"])
