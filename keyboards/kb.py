@@ -75,6 +75,7 @@ def king_main_kb() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="🏆 Global Reyting", callback_data="global_rating"))
     builder.row(InlineKeyboardButton(text="📜 Xronika", callback_data="view_chronicles"))
     builder.row(InlineKeyboardButton(text="🏪 Iron Bank", callback_data="market_main"))
+    builder.row(InlineKeyboardButton(text="🏦 Temir Bankdan qarz so'rash", callback_data="lord_request_loan"))
     return builder.as_markup()
 
 
