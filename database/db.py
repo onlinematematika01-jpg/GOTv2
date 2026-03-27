@@ -26,8 +26,8 @@ async def init_db():
                 name        VARCHAR(100) UNIQUE NOT NULL,
                 sigil       VARCHAR(10)  DEFAULT '⚔️',
                 king_id     BIGINT       UNIQUE,
-                gold        INTEGER      DEFAULT 1000,
-                soldiers    INTEGER      DEFAULT 500,
+                gold        INTEGER      DEFAULT 0,
+                soldiers    INTEGER      DEFAULT 0,
                 dragons     INTEGER      DEFAULT 0,
                 created_at  TIMESTAMP    DEFAULT NOW()
             )
@@ -226,6 +226,9 @@ async def init_db():
             INSERT INTO game_settings (key, value) VALUES ('game_active', 'true')
             ON CONFLICT (key) DO NOTHING
         """)
+
+        # Qirolliklarning gold/soldiers ni 0 ga reset qilish (ular endi vassallarda saqlanadi)
+        await conn.execute("UPDATE kingdoms SET gold=0, soldiers=0")
 
         # ══════════════════════════════════════════════════════════════════════
         # Da'vogarlik (Claim) tizimi
