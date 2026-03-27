@@ -20,9 +20,10 @@ from database.queries import (
     get_kingdom_vassals, get_vassal, update_vassal,
     add_chronicle, get_artifacts, delete_artifact, get_kingdom_ruler_vassal,
     create_war, get_war, update_war, get_active_war,
-    add_war_support, get_war_support, create_tribute, get_active_tributes
+    add_war_support, get_war_support, create_tribute, get_active_tributes,
+    get_vassal_by_lord, get_vassal_lord_user
 )
-from keyboards.kb import back_kb, king_main_kb
+from keyboards.kb import back_kb, king_main_kb, lord_main_kb
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -81,6 +82,268 @@ class WarStates(StatesGroup):
     waiting_support_gold = State()
     waiting_support_soldiers = State()
     waiting_support_scorpions = State()
+
+
+# ── Vassal urush e'loni (lord → hukmdor tasdiqlovi → nishon) ─────────────────
+
+@router.callback_query(F.data == "lord_declare_war")
+async def cb_lord_declare_war(call: CallbackQuery, db_user: dict, bot: Bot):
+    if db_user.get("role") != "lord":
+        await call.answer("🛡️ Faqat Lord uchun!")
+        return
+
+    if not can_declare_war():
+        now = now_uz()
+        await call.message.edit_text(
+            f"⏰ <b>Urush e'lon qilish vaqti emas!</b>\n\n"
+            f"Urushlar faqat <b>20:00 — 00:00</b> oralig'ida e'lon qilinadi.\n"
+            f"Hozirgi vaqt: {now.strftime('%H:%M')} (UTC+5)",
+            reply_markup=back_kb("lord_main")
+        )
+        return
+
+    my_vassal = await get_vassal_by_lord(call.from_user.id)
+    if not my_vassal:
+        await call.answer("❌ Vassal oilangiz topilmadi!", show_alert=True)
+        return
+
+    active = await get_active_war(my_vassal["kingdom_id"])
+    if active:
+        await call.message.edit_text(
+            "❌ Sizning hududingiz allaqachon urushda!",
+            reply_markup=back_kb("lord_main")
+        )
+        return
+
+    hukmdor = await get_kingdom_ruler_vassal(my_vassal["kingdom_id"])
+
+    # Agar siz hukmdor bo'lsangiz yoki hukmdor topilmasa — to'g'ridan-to'g'ri e'lon qiling
+    if not hukmdor or hukmdor["id"] == my_vassal["id"]:
+        await _show_lord_war_targets(call, my_vassal)
+        return
+
+    # Hukmdor vassal lordiga ruxsat so'rovi yuborish
+    hukmdor_lord = await get_vassal_lord_user(hukmdor["id"])
+    if not hukmdor_lord:
+        # Hukmdor lordisiz — to'g'ridan-to'g'ri e'lon qilishga ruxsat
+        await _show_lord_war_targets(call, my_vassal)
+        return
+
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(
+            text="✅ Ruxsat beraman",
+            callback_data=f"war_lordreq_approve_{call.from_user.id}_{my_vassal['id']}"
+        ),
+        InlineKeyboardButton(
+            text="❌ Rad etaman",
+            callback_data=f"war_lordreq_reject_{call.from_user.id}"
+        )
+    )
+    try:
+        await bot.send_message(
+            hukmdor_lord["telegram_id"],
+            f"⚔️ <b>Urush so'rovi!</b>\n\n"
+            f"🛡️ <b>{my_vassal['name']}</b> vassal oilasining lori\n"
+            f"boshqa hudud vassaliga urush ochmoqchi.\n\n"
+            f"Siz hukmdor vassal sifatida ruxsat berasizmi?",
+            reply_markup=kb.as_markup()
+        )
+    except Exception:
+        pass
+
+    await call.message.edit_text(
+        f"⏳ <b>Hukmdor vassal ruxsati kutilmoqda...</b>\n\n"
+        f"🛡️ <b>{hukmdor['name']}</b> lori tasdiqlashi kutilmoqda."
+    )
+
+
+async def _show_lord_war_targets(call: CallbackQuery, my_vassal: dict):
+    """Ruxsat berilgandan so'ng nishon hudud tanlash"""
+    kingdoms = await get_all_kingdoms()
+    others = [k for k in kingdoms if k["id"] != my_vassal["kingdom_id"]]
+
+    builder = InlineKeyboardBuilder()
+    for k in others:
+        builder.row(InlineKeyboardButton(
+            text=f"{k['sigil']} {k['name']}",
+            callback_data=f"lord_war_target_{k['id']}_{my_vassal['id']}"
+        ))
+    builder.row(InlineKeyboardButton(text="◀️ Orqaga", callback_data="lord_main"))
+
+    now = now_uz()
+    start_time = get_war_start_time()
+    if now.hour >= WAR_CUTOFF_HOUR:
+        time_text = "ertaga soat 20:00 da"
+    elif start_time:
+        time_text = f"{start_time.strftime('%H:%M')} da (1 soatdan keyin)"
+    else:
+        time_text = "?"
+
+    await call.message.edit_text(
+        f"⚔️ <b>Urush e'lon qilish</b>\n\n"
+        f"Qaysi hudud vassaliga urush ochasiz?\n"
+        f"⏰ Urush <b>{time_text}</b> boshlanadi",
+        reply_markup=builder.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("war_lordreq_approve_"))
+async def cb_lordreq_approve(call: CallbackQuery, db_user: dict, bot: Bot):
+    if db_user.get("role") != "lord":
+        await call.answer("🛡️ Faqat Lord uchun!")
+        return
+
+    parts = call.data.split("_")
+    requesting_lord_tg_id = int(parts[4])
+    requesting_vassal_id = int(parts[5])
+
+    requesting_vassal = await get_vassal(requesting_vassal_id)
+    if not requesting_vassal:
+        await call.answer("❌ Vassal topilmadi!", show_alert=True)
+        return
+
+    kingdoms = await get_all_kingdoms()
+    others = [k for k in kingdoms if k["id"] != requesting_vassal["kingdom_id"]]
+
+    now = now_uz()
+    start_time = get_war_start_time()
+    if now.hour >= WAR_CUTOFF_HOUR:
+        time_text = "ertaga soat 20:00 da"
+    elif start_time:
+        time_text = f"{start_time.strftime('%H:%M')} da"
+    else:
+        time_text = "?"
+
+    builder = InlineKeyboardBuilder()
+    for k in others:
+        builder.row(InlineKeyboardButton(
+            text=f"{k['sigil']} {k['name']}",
+            callback_data=f"lord_war_target_{k['id']}_{requesting_vassal_id}"
+        ))
+
+    try:
+        await bot.send_message(
+            requesting_lord_tg_id,
+            f"✅ <b>Ruxsat berildi!</b>\n\n"
+            f"Hukmdor vassal urush e'lon qilishga ruxsat berdi.\n\n"
+            f"⚔️ Qaysi hudud vassaliga urush ochasiz?\n"
+            f"⏰ Urush <b>{time_text}</b> boshlanadi",
+            reply_markup=builder.as_markup()
+        )
+    except Exception:
+        pass
+
+    await call.message.edit_text(
+        f"✅ <b>{requesting_vassal['name']}</b> vassal oilasiga urush e'lon qilish ruxsati berildi."
+    )
+
+
+@router.callback_query(F.data.startswith("war_lordreq_reject_"))
+async def cb_lordreq_reject(call: CallbackQuery, db_user: dict, bot: Bot):
+    if db_user.get("role") != "lord":
+        await call.answer("🛡️ Faqat Lord uchun!")
+        return
+
+    parts = call.data.split("_")
+    requesting_lord_tg_id = int(parts[4])
+
+    try:
+        await bot.send_message(
+            requesting_lord_tg_id,
+            "❌ <b>Urush so'rovingiz rad etildi.</b>\n\n"
+            "Hukmdor vassal urush e'lon qilishga ruxsat bermadi."
+        )
+    except Exception:
+        pass
+
+    await call.message.edit_text("❌ Urush so'rovi rad etildi.")
+
+
+@router.callback_query(F.data.startswith("lord_war_target_"))
+async def cb_lord_war_target(call: CallbackQuery, db_user: dict, bot: Bot):
+    parts = call.data.split("_")
+    target_kingdom_id = int(parts[3])
+    declaring_vassal_id = int(parts[4])
+
+    declaring_vassal = await get_vassal(declaring_vassal_id)
+    if not declaring_vassal:
+        await call.answer("❌ Vassal topilmadi!", show_alert=True)
+        return
+
+    my_kingdom_id = declaring_vassal["kingdom_id"]
+    my_kingdom = await get_kingdom(my_kingdom_id)
+    target = await get_kingdom(target_kingdom_id)
+
+    active = await get_active_war(my_kingdom_id)
+    if active:
+        await call.message.edit_text(
+            "❌ Sizning hududingiz allaqachon urushda!",
+            reply_markup=back_kb("lord_main")
+        )
+        return
+
+    start_time = get_war_start_time()
+    if not start_time:
+        await call.message.edit_text(
+            "⏰ <b>Urush e'lon qilish vaqti emas!</b> (20:00 — 00:00)",
+            reply_markup=back_kb("lord_main")
+        )
+        return
+
+    start_utc = start_time - timedelta(hours=5)
+    war = await create_war(my_kingdom_id, target_kingdom_id, start_utc)
+
+    now = now_uz()
+    if now.hour >= WAR_CUTOFF_HOUR:
+        time_text = "ertaga soat 20:00 da"
+    else:
+        time_text = f"{start_time.strftime('%H:%M')} da"
+
+    # Mudofaa hududi a'zolariga ogohlantirish
+    defender_members = await get_kingdom_members(target_kingdom_id)
+    for m in defender_members:
+        try:
+            await bot.send_message(
+                m["telegram_id"],
+                f"🚨 <b>URUSH E'LONI! XAVF!</b> 🚨\n\n"
+                f"⚔️ {my_kingdom['sigil']} <b>{my_kingdom['name']}</b> hududidagi\n"
+                f"🛡️ <b>{declaring_vassal['name']}</b> vassal oilasi\n"
+                f"sizning {target['sigil']} <b>{target['name']}</b> hududingizga\n"
+                f"<b>URUSH E'LON QILDI!</b>\n\n"
+                f"⏰ Urush {time_text} boshlanadi!"
+            )
+        except Exception:
+            pass
+
+    # Hujumchi hududi a'zolariga xabar
+    attacker_members = await get_kingdom_members(my_kingdom_id)
+    for m in attacker_members:
+        try:
+            if m["telegram_id"] != call.from_user.id:
+                await bot.send_message(
+                    m["telegram_id"],
+                    f"⚔️ <b>{declaring_vassal['name']}</b> vassal oilasi\n"
+                    f"{target['sigil']} <b>{target['name']}</b>ga urush e'lon qildi!\n"
+                    f"⏰ Urush {time_text} boshlanadi!"
+                )
+        except Exception:
+            pass
+
+    await call.message.edit_text(
+        f"✅ <b>{target['sigil']} {target['name']}</b>ga urush e'lon qilindi!\n"
+        f"⏰ Boshlanish: {time_text}",
+        reply_markup=lord_main_kb()
+    )
+    await add_chronicle(
+        "war", "⚔️ Urush e'loni",
+        f"{declaring_vassal['name']} ({my_kingdom['name']}) → {target['name']} | {time_text}",
+        actor_id=call.from_user.id
+    )
+
+    delay_seconds = (start_utc - datetime.utcnow()).total_seconds()
+    if delay_seconds > 0:
+        asyncio.create_task(_wait_and_start_war(bot, war["id"], delay_seconds))
 
 
 @router.callback_query(F.data == "king_declare_war")
