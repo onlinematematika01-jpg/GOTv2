@@ -7,7 +7,8 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database.queries import (
-    get_all_kingdoms, get_all_vassals, get_artifacts, get_kingdom_vassals
+    get_all_kingdoms, get_all_vassals, get_artifacts, get_kingdom_vassals,
+    get_kingdom_ruler_vassal
 )
 from keyboards.kb import back_kb
 
@@ -47,29 +48,29 @@ async def _collect_all_entities():
     for k in kingdoms:
         arts = await get_artifacts("kingdom", k["id"])
 
-        # Vassal artefaktlarini ham qo'shish
-        vassals = await get_kingdom_vassals(k["id"])
-        vassal_arts = []
-        for v in vassals:
-            vassal_arts += await get_artifacts("vassal", v["id"])
+        # Qirollik kuchi = hukmdor vassalning kuchi
+        ruler = await get_kingdom_ruler_vassal(k["id"])
+        ruler_gold = ruler["gold"] if ruler else 0
+        ruler_soldiers = ruler["soldiers"] if ruler else 0
+        ruler_arts = await get_artifacts("vassal", ruler["id"]) if ruler else []
 
-        all_arts = list(arts) + vassal_arts
-        da = sum(1 for a in all_arts if a["artifact"] == "🐉 Ajdar" and a["tier"] == "A")
-        db = sum(1 for a in all_arts if a["artifact"] == "🐉 Ajdar" and a["tier"] == "B")
-        dc = sum(1 for a in all_arts if a["artifact"] == "🐉 Ajdar" and a["tier"] == "C")
+        da = sum(1 for a in ruler_arts if a["artifact"] == "🐉 Ajdar" and a["tier"] == "A")
+        db = sum(1 for a in ruler_arts if a["artifact"] == "🐉 Ajdar" and a["tier"] == "B")
+        dc = sum(1 for a in ruler_arts if a["artifact"] == "🐉 Ajdar" and a["tier"] == "C")
         total_dragons = da + db + dc
         dragon_power = da * DRAGON_A_POWER + db * DRAGON_B_POWER + dc * DRAGON_C_POWER
         total_power = int(
-            k["gold"] * GOLD_POWER +
-            k["soldiers"] * SOLDIER_POWER +
+            ruler_gold * GOLD_POWER +
+            ruler_soldiers * SOLDIER_POWER +
             dragon_power
         )
 
         entities.append({
             "type": "kingdom",
             "name": f"{k['sigil']} {k['name']}",
-            "gold": k["gold"],
-            "soldiers": k["soldiers"],
+            "ruler_name": ruler["name"] if ruler else None,
+            "gold": ruler_gold,
+            "soldiers": ruler_soldiers,
             "dragons": total_dragons,
             "dragon_power": dragon_power,
             "power": total_power,
@@ -126,9 +127,11 @@ def _build_rating_text(entities: list, sort_key: str, label: str, emoji: str) ->
     text = f"{emoji} <b>GLOBAL REYTING — {label}</b>\n\n"
     for i, e in enumerate(sorted_list[:20], 1):
         medal = MEDALS.get(i, f"{i}.")
-        type_mark = "🏰" if e["type"] == "kingdom" else "🛡️"
         value = e[sort_key]
-        text += f"{medal} {e['name']}\n"
+        if e["type"] == "kingdom" and e.get("ruler_name"):
+            text += f"{medal} {e['name']} / {e['ruler_name']}\n"
+        else:
+            text += f"{medal} {'🛡️' if e['type'] == 'vassal' else ''} {e['name']}\n"
         text += f"   {emoji} {value:,}\n"
     return text
 
