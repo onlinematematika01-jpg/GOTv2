@@ -22,15 +22,21 @@ async def init_db():
         # ── Kingdoms ──────────────────────────────────────────────────────────
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS kingdoms (
-                id          SERIAL PRIMARY KEY,
-                name        VARCHAR(100) UNIQUE NOT NULL,
-                sigil       VARCHAR(10)  DEFAULT '⚔️',
-                king_id     BIGINT       UNIQUE,
-                gold        INTEGER      DEFAULT 0,
-                soldiers    INTEGER      DEFAULT 0,
-                dragons     INTEGER      DEFAULT 0,
-                created_at  TIMESTAMP    DEFAULT NOW()
+                id                  SERIAL PRIMARY KEY,
+                name                VARCHAR(100) UNIQUE NOT NULL,
+                sigil               VARCHAR(10)  DEFAULT '⚔️',
+                king_id             BIGINT       UNIQUE,
+                hukmdor_vassal_id   INTEGER,
+                gold                INTEGER      DEFAULT 0,
+                soldiers            INTEGER      DEFAULT 0,
+                dragons             INTEGER      DEFAULT 0,
+                created_at          TIMESTAMP    DEFAULT NOW()
             )
+        """)
+        # Eski baza uchun ustun qo'shish
+        await conn.execute("""
+            ALTER TABLE kingdoms
+            ADD COLUMN IF NOT EXISTS hukmdor_vassal_id INTEGER
         """)
 
         # ── Vassal families ───────────────────────────────────────────────────
@@ -122,6 +128,27 @@ async def init_db():
             INSERT INTO queue_state (id, phase, current_vassal_index)
             VALUES (1, 2, 0)
             ON CONFLICT (id) DO NOTHING
+        """)
+
+        # ── Hukmdor da'vosi ───────────────────────────────────────────────────
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS hukmdor_claims (
+                id                  SERIAL PRIMARY KEY,
+                claimant_vassal_id  INTEGER NOT NULL REFERENCES vassals(id) ON DELETE CASCADE,
+                kingdom_id          INTEGER NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+                status              VARCHAR(20) DEFAULT 'pending',
+                created_at          TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS hukmdor_claim_responses (
+                id           SERIAL PRIMARY KEY,
+                claim_id     INTEGER NOT NULL REFERENCES hukmdor_claims(id) ON DELETE CASCADE,
+                vassal_id    INTEGER NOT NULL,
+                response     VARCHAR(10) NOT NULL,
+                responded_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE (claim_id, vassal_id)
+            )
         """)
 
         # ── Assassination hits ────────────────────────────────────────────────
