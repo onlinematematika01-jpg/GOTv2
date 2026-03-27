@@ -406,6 +406,30 @@ async def get_artifacts(owner_type: str, owner_id: int):
         )
 
 
+async def delete_artifact(artifact_id: int):
+    """Artifact bazadan o'chirish (bir martalik chayon/ajdar uchun)"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM artifacts WHERE id=$1", artifact_id)
+
+
+async def get_kingdom_ruler_vassal(kingdom_id: int):
+    """Qirollikning hukmdor vassalini qaytaradi (king_id orqali)"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        kingdom = await conn.fetchrow(
+            "SELECT * FROM kingdoms WHERE id=$1", kingdom_id
+        )
+        if not kingdom or not kingdom["king_id"]:
+            return None
+        # king_id — foydalanuvchi telegram_id, u lord bo'lgan vassalni topamiz
+        return await conn.fetchrow(
+            "SELECT v.* FROM vassals v JOIN users u ON u.vassal_id = v.id "
+            "WHERE u.telegram_id = $1 AND v.kingdom_id = $2",
+            kingdom["king_id"], kingdom_id
+        )
+
+
 # ── Assassination queries ─────────────────────────────────────────────────────
 
 async def add_assassination_hit(target_id: int, attacker_id: int, attacker_role: str):
@@ -737,17 +761,32 @@ async def set_game_active(active: bool):
 # ── Da'vogarlik (Claim) queries ───────────────────────────────────────────────
 
 async def get_strongest_vassal_in_kingdom(kingdom_id: int):
-    """Qirollikdagi eng kuchli vassalni topish (soldiers bo'yicha)"""
+    """Qirollikdagi eng kuchli vassalni topish (soldiers + artifact bonusi)"""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        return await conn.fetchrow(
-            """SELECT v.*, COALESCE(v.soldiers, 0) as power
-               FROM vassals v
-               WHERE v.kingdom_id = $1
-               ORDER BY v.soldiers DESC NULLS LAST
-               LIMIT 1""",
-            kingdom_id
+        vassals = await conn.fetch(
+            "SELECT * FROM vassals WHERE kingdom_id=$1", kingdom_id
         )
+        if not vassals:
+            return None
+        best = None
+        best_power = -1
+        for v in vassals:
+            power = v["soldiers"] or 0
+            arts = await conn.fetch(
+                "SELECT artifact, tier FROM artifacts WHERE owner_type='vassal' AND owner_id=$1",
+                v["id"]
+            )
+            for a in arts:
+                if a["artifact"] == "🐉 Ajdar":
+                    if a["tier"] == "A": power += 100
+                    elif a["tier"] == "B": power += 50
+                    elif a["tier"] == "C": power += 25
+            if power > best_power:
+                best_power = power
+                best = dict(v)
+                best["power"] = power
+        return best
 
 
 async def create_claim(claimant_vassal_id: int, kingdom_id: int):
