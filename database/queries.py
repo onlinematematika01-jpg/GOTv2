@@ -46,100 +46,59 @@ async def update_user(telegram_id: int, **kwargs):
 
 async def assign_user_to_slot(telegram_id: int) -> dict:
     """
-    Core queue algorithm:
-    Phase 1: Fill 7 kingdoms × 7 members = 49 users
-    Phase 2 & 3: Round-robin vassals — bittadan qo'shib borish.
+    Queue algoritmi:
+    Foydalanuvchilar to'g'ridan-to'g'ri vassal oilalarga round-robin usulida joylashtiriladi.
       - Har bir vassalga navbat bilan 1 ta qo'shiladi.
       - Hamma vassal bittadan to'lsa, yana birinchisidan boshlanadi.
-      - Maksimum 7 ta (MAX_VASSAL_MEMBERS).
-      - Kelajakda qo'shilishi mumkin bo'lgan yangi vassallar ham
-        avtomatik round-robin'ga qo'shiladi (har doim jonli vassal
-        ro'yxatiga qarab ishlaydi).
+      - Maksimum MAX_VASSAL_MEMBERS ta.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
         qs = await conn.fetchrow("SELECT * FROM queue_state WHERE id = 1")
         phase = qs["phase"]
 
-        # ── PHASE 1: Fill kingdoms ────────────────────────────────────────────
-        if phase == 1:
-            for kname in KINGDOM_NAMES:
-                kingdom = await conn.fetchrow(
-                    "SELECT * FROM kingdoms WHERE name = $1", kname
-                )
-                if kingdom is None:
-                    continue
-                count = await conn.fetchval(
-                    "SELECT COUNT(*) FROM users WHERE kingdom_id = $1", kingdom["id"]
-                )
-                if count < MAX_KINGDOM_MEMBERS:
-                    await conn.execute(
-                        "UPDATE users SET kingdom_id=$1 WHERE telegram_id=$2",
-                        kingdom["id"], telegram_id
-                    )
-                    return {"phase": 1, "kingdom": kname}
+        # ── VASSAL ROUND-ROBIN ─────────────────────────────────────────────────
+        vassals = await conn.fetch("SELECT * FROM vassals ORDER BY id")
+        if not vassals:
+            return {"phase": phase, "error": "No vassals defined"}
 
-            # Barcha qirolliklar to'ldi → vassal fazasiga o'tish
-            await conn.execute(
-                "UPDATE queue_state SET phase=2, current_vassal_index=0 WHERE id=1"
+        n = len(vassals)
+        idx = qs["current_vassal_index"] % n
+
+        for _ in range(n):
+            vassal = vassals[idx % n]
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM users WHERE vassal_id = $1", vassal["id"]
             )
-            phase = 2
-
-        # ── PHASE 2 & 3: Round-robin vassals (bittadan, max 7) ───────────────
-        #
-        # Algoritm:
-        #   1. Barcha vassallarni ID bo'yicha tartiblangan holda olamiz.
-        #      (Yangi vassal qo'shilsa ham ro'yxat avtomatik yangilanadi.)
-        #   2. current_vassal_index — keyingi urinish boshlanadigan joy.
-        #   3. Har bir vassal uchun: count < MAX_VASSAL_MEMBERS bo'lsa → shu
-        #      vassalga qo'shamiz, indeksni +1 qilamiz (ro'yxat uzunligiga %).
-        #   4. Agar aylanib chiqqandan keyin ham joy topilmasa — hammasi to'lgan.
-        #
-        if phase in (2, 3):
-            vassals = await conn.fetch("SELECT * FROM vassals ORDER BY id")
-            if not vassals:
-                return {"phase": phase, "error": "No vassals defined"}
-
-            n = len(vassals)
-            idx = qs["current_vassal_index"] % n  # Yangi vassal qo'shilsa ham xato bo'lmasin
-
-            # Bir to'liq aylanish uchun n ta urinish
-            for _ in range(n):
-                vassal = vassals[idx % n]
-                count = await conn.fetchval(
-                    "SELECT COUNT(*) FROM users WHERE vassal_id = $1", vassal["id"]
+            if count < MAX_VASSAL_MEMBERS:
+                await conn.execute(
+                    """UPDATE users SET kingdom_id=$1, vassal_id=$2
+                       WHERE telegram_id=$3""",
+                    vassal["kingdom_id"], vassal["id"], telegram_id
                 )
-                if count < MAX_VASSAL_MEMBERS:
-                    await conn.execute(
-                        """UPDATE users SET kingdom_id=$1, vassal_id=$2
-                           WHERE telegram_id=$3""",
-                        vassal["kingdom_id"], vassal["id"], telegram_id
-                    )
-                    next_idx = (idx + 1) % n
-                    # Phase 2 → 3: barcha vassal kamida 1 kishiga ega bo'lsa
-                    new_phase = phase
-                    if phase == 2:
-                        all_have_one = True
-                        for v in vassals:
-                            c = await conn.fetchval(
-                                "SELECT COUNT(*) FROM users WHERE vassal_id = $1", v["id"]
-                            )
-                            if c < 1:
-                                all_have_one = False
-                                break
-                        if all_have_one:
-                            new_phase = 3
+                next_idx = (idx + 1) % n
+                # Phase 2 → 3: barcha vassal kamida 1 kishiga ega bo'lsa
+                new_phase = phase
+                if phase == 2:
+                    all_have_one = True
+                    for v in vassals:
+                        c = await conn.fetchval(
+                            "SELECT COUNT(*) FROM users WHERE vassal_id = $1", v["id"]
+                        )
+                        if c < 1:
+                            all_have_one = False
+                            break
+                    if all_have_one:
+                        new_phase = 3
 
-                    await conn.execute(
-                        "UPDATE queue_state SET phase=$1, current_vassal_index=$2 WHERE id=1",
-                        new_phase, next_idx
-                    )
-                    return {"phase": new_phase, "vassal": vassal["name"]}
-                idx = (idx + 1) % n
+                await conn.execute(
+                    "UPDATE queue_state SET phase=$1, current_vassal_index=$2 WHERE id=1",
+                    new_phase, next_idx
+                )
+                return {"phase": new_phase, "vassal": vassal["name"]}
+            idx = (idx + 1) % n
 
-            return {"phase": phase, "error": "All vassal slots full"}
-
-    return {"error": "Unknown phase"}
+        return {"phase": phase, "error": "All vassal slots full"}
 
 
 # ── Kingdom queries ───────────────────────────────────────────────────────────
@@ -976,7 +935,7 @@ async def reset_all_users_for_new_game() -> list:
 
         # Navbat holati qayta boshidan
         await conn.execute(
-            "UPDATE queue_state SET phase=1, current_vassal_index=0 WHERE id=1"
+            "UPDATE queue_state SET phase=2, current_vassal_index=0 WHERE id=1"
         )
 
         # O'yin tarixi jadvallarini tozalash
