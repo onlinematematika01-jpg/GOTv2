@@ -21,6 +21,7 @@ def admin_main_kb(game_active: bool = True) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="📜 Xronika", callback_data="view_chronicles"))
     builder.row(InlineKeyboardButton(text="🏆 Global Reyting", callback_data="global_rating"))
     builder.row(InlineKeyboardButton(text="🏦 Temir Bank boshqaruvi", callback_data="admin_iron_bank"))
+    builder.row(InlineKeyboardButton(text="🔄 O'yinchilar bazasini tozalash", callback_data="admin_reset_confirm"))
     # Holat bo'yicha to'g'ri tugma
     if game_active:
         builder.row(InlineKeyboardButton(text="⏸️ O'yinni to'xtatish", callback_data="admin_pause_game"))
