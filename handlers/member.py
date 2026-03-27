@@ -12,7 +12,7 @@ from database.queries import (
     get_user, update_user, get_vassal, get_vassal_members, cast_vote,
     get_chronicles, add_chronicle, buy_artifact, get_artifacts,
     get_kingdom, update_vassal, get_election_winner, update_kingdom,
-    get_price, get_all_prices
+    get_price, get_all_prices, get_kingdom_ruler_vassal
 )
 from keyboards.kb import member_main_kb, market_kb, back_kb, candidates_kb
 from config import DAILY_FARM_GOLD, GOLD_TO_SOLDIER_RATE, MIN_VASSAL_MEMBERS
@@ -353,15 +353,16 @@ async def _buy(call: CallbackQuery, db_user: dict, artifact: str, price: int, ti
         await update_vassal(vassal["id"], gold=vassal["gold"] - price)
         await buy_artifact("vassal", vassal["id"], artifact, tier)
 
-    # Qirol — qirollik xazinasidan
+    # Qirol — hukmdor vassal xazinasidan
     elif role == "king":
         kingdom = await get_kingdom(user["kingdom_id"]) if user.get("kingdom_id") else None
-        if not kingdom or kingdom["gold"] < price:
-            have = kingdom["gold"] if kingdom else 0
+        ruler = await get_kingdom_ruler_vassal(kingdom["id"]) if kingdom else None
+        if not ruler or ruler["gold"] < price:
+            have = ruler["gold"] if ruler else 0
             await call.answer(f"❌ Yetarli oltin yo'q! Kerak: {price}, Xazina: {have}", show_alert=True)
             return
-        await update_kingdom(kingdom["id"], gold=kingdom["gold"] - price)
-        await buy_artifact("kingdom", kingdom["id"], artifact, tier)
+        await update_vassal(ruler["id"], gold=ruler["gold"] - price)
+        await buy_artifact("vassal", ruler["id"], artifact, tier)
 
     await call.message.edit_text(
         f"✅ <b>{artifact}</b> sotib olindi!\n💰 Sarflandi: {price} oltin",
