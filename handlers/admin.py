@@ -47,6 +47,9 @@ class AdminStates(StatesGroup):
     waiting_move_target_type  = State()
     waiting_move_kingdom      = State()
     waiting_move_vassal       = State()
+    # Lord tayinlash
+    waiting_lord_vassal       = State()
+    waiting_lord_user_id      = State()
     # Temir Bank
     waiting_price_item        = State()
     waiting_price_amount      = State()
@@ -429,6 +432,137 @@ async def msg_assign_king(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=admin_main_kb())
     await add_chronicle("coronation", "Yangi Qirol!", f"{target_user['full_name']} — {kingdom['name']} Qiroli",
                         actor_id=message.from_user.id, target_id=king_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LORD TAYINLASH (ADMIN)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "admin_assign_lord")
+async def cb_assign_lord_start(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("🚫 Ruxsat yo'q!")
+        return
+    vassals = await get_all_vassals()
+    if not vassals:
+        await call.message.edit_text("❌ Hech qanday vassal oila yo'q!", reply_markup=admin_main_kb())
+        return
+    builder = InlineKeyboardBuilder()
+    for v in vassals:
+        kingdom = await get_kingdom(v["kingdom_id"])
+        k_name = f"{kingdom['sigil']} {kingdom['name']}" if kingdom else "?"
+        members = await get_vassal_members(v["id"])
+        lord_mark = "👑" if v.get("lord_id") else "❌"
+        builder.row(InlineKeyboardButton(
+            text=f"🛡️ {v['name']} • {k_name} {lord_mark} ({len(members)} kishi)",
+            callback_data=f"admin_lord_vassal_{v['id']}"
+        ))
+    builder.row(InlineKeyboardButton(text="◀️ Orqaga", callback_data="admin_main"))
+    await state.set_state(AdminStates.waiting_lord_vassal)
+    await call.message.edit_text(
+        "🛡️ <b>Lord tayinlash</b>\n\nQaysi vassal oilaga Lord tayinlansin?\n"
+        "(👑 = hozir Lord bor, ❌ = Lord yo'q)",
+        reply_markup=builder.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("admin_lord_vassal_"), AdminStates.waiting_lord_vassal)
+async def cb_lord_vassal_select(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("🚫 Ruxsat yo'q!")
+        return
+    vassal_id = int(call.data.split("_")[-1])
+    vassal = await get_vassal(vassal_id)
+    members = await get_vassal_members(vassal_id)
+
+    await state.update_data(lord_vassal_id=vassal_id)
+    await state.set_state(AdminStates.waiting_lord_user_id)
+
+    # Vassal a'zolari ro'yxatini ko'rsatish
+    text = f"🛡️ <b>{vassal['name']}</b> oilasiga Lord tayinlash\n\n"
+    if members:
+        text += "👥 <b>Oila a'zolari:</b>\n"
+        for m in members:
+            role_mark = "👑" if m["role"] == "king" else ("🛡️" if m["role"] == "lord" else "⚔️")
+            text += f"  {role_mark} {m['full_name'] or m['username']} — ID: <code>{m['telegram_id']}</code>\n"
+    else:
+        text += "⚠️ Oilada hali a'zo yo'q.\n"
+    text += "\n👤 Lord bo'ladigan foydalanuvchi Telegram ID sini yuboring:"
+
+    await call.message.edit_text(text, reply_markup=back_kb("admin_assign_lord"))
+
+
+@router.message(AdminStates.waiting_lord_user_id)
+async def msg_assign_lord(message: Message, state: FSMContext, bot: Bot):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        lord_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ ID noto'g'ri. Faqat raqam kiriting.")
+        return
+
+    data = await state.get_data()
+    vassal_id = data.get("lord_vassal_id")
+
+    target_user = await get_user(lord_id)
+    if not target_user:
+        await message.answer("❌ Bu foydalanuvchi topilmadi (avval /start bosishi kerak).")
+        return
+
+    vassal = await get_vassal(vassal_id)
+    if not vassal:
+        await message.answer("❌ Vassal topilmadi!")
+        await state.clear()
+        return
+
+    # Eski lord lavozimini olib tashlash
+    if vassal.get("lord_id") and vassal["lord_id"] != lord_id:
+        old_lord = await get_user(vassal["lord_id"])
+        await update_user(vassal["lord_id"], role="member")
+        if old_lord:
+            try:
+                await bot.send_message(
+                    vassal["lord_id"],
+                    f"⚠️ <b>Siz Lord lavozimidan ozod qildingiz!</b>\n\n"
+                    f"Admin yangi Lord tayinladi."
+                )
+            except Exception:
+                pass
+
+    # Agar foydalanuvchi boshqa vassalda lord bo'lsa, uni olib tashlash
+    if target_user.get("role") == "lord" and target_user.get("vassal_id") and target_user["vassal_id"] != vassal_id:
+        await update_vassal(target_user["vassal_id"], lord_id=None)
+
+    # Lord tayinlash
+    await update_vassal(vassal_id, lord_id=lord_id)
+    await update_user(lord_id, role="lord", kingdom_id=vassal["kingdom_id"], vassal_id=vassal_id)
+
+    kingdom = await get_kingdom(vassal["kingdom_id"])
+    await state.clear()
+
+    try:
+        await bot.send_message(
+            lord_id,
+            f"🛡️ <b>Tabriklaymiz!</b>\n\n"
+            f"Siz <b>{vassal['name']}</b> oilasining Lordi etib tayinlandingiz!\n"
+            f"Qirollik: {kingdom['sigil']} <b>{kingdom['name']}</b>\n\n"
+            f"⚔️ Oilangizni boshqarishga kirishasiz!"
+        )
+    except Exception:
+        pass
+
+    text = (
+        f"✅ <b>{target_user['full_name']}</b> "
+        f"🛡️ <b>{vassal['name']}</b> oilasining Lordi etib tayinlandi!\n"
+        f"Qirollik: {kingdom['sigil']} {kingdom['name']}"
+    )
+    await message.answer(text, reply_markup=admin_main_kb())
+    await add_chronicle(
+        "election", "Yangi Lord!",
+        f"{target_user['full_name']} — {vassal['name']} oilasining Lordi",
+        actor_id=message.from_user.id, target_id=lord_id
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
