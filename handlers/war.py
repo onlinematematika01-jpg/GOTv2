@@ -392,8 +392,10 @@ async def cb_help_soldiers(call: CallbackQuery, db_user: dict, state: FSMContext
                              help_type="soldiers")
     await state.set_state(WarStates.waiting_support_soldiers)
     my_kingdom = await get_kingdom_by_king(call.from_user.id)
+    ruler = await get_kingdom_ruler_vassal(my_kingdom["id"]) if my_kingdom else None
+    soldiers = ruler["soldiers"] if ruler else 0
     await call.message.edit_text(
-        f"⚔️ Nechta askar yuborasiz?\n(Sizda: {my_kingdom['soldiers']} askar)",
+        f"⚔️ Nechta askar yuborasiz?\n(Hukmdor vassal xazinasi: {soldiers} askar)",
         reply_markup=back_kb()
     )
 
@@ -406,8 +408,10 @@ async def cb_help_gold(call: CallbackQuery, db_user: dict, state: FSMContext):
                              help_type="gold")
     await state.set_state(WarStates.waiting_support_gold)
     my_kingdom = await get_kingdom_by_king(call.from_user.id)
+    ruler = await get_kingdom_ruler_vassal(my_kingdom["id"]) if my_kingdom else None
+    gold = ruler["gold"] if ruler else 0
     await call.message.edit_text(
-        f"💰 Nechta oltin yuborasiz?\n(Sizda: {my_kingdom['gold']} oltin)",
+        f"💰 Nechta oltin yuborasiz?\n(Hukmdor vassal xazinasi: {gold} oltin)",
         reply_markup=back_kb()
     )
 
@@ -422,14 +426,18 @@ async def msg_support_soldiers(message: Message, state: FSMContext, db_user: dic
         return
     data = await state.get_data()
     my_kingdom = await get_kingdom_by_king(message.from_user.id)
-    if my_kingdom["soldiers"] < amount:
-        await message.answer(f"❌ Yetarli askar yo'q! Sizda: {my_kingdom['soldiers']}")
+    ruler = await get_kingdom_ruler_vassal(my_kingdom["id"]) if my_kingdom else None
+    if not ruler or ruler["soldiers"] < amount:
+        have = ruler["soldiers"] if ruler else 0
+        await message.answer(f"❌ Yetarli askar yo'q! Sizda: {have}")
         return
-    await update_kingdom(my_kingdom["id"], soldiers=my_kingdom["soldiers"] - amount)
+    await update_vassal(ruler["id"], soldiers=ruler["soldiers"] - amount)
     await add_war_support(data["help_war_id"], "kingdom", my_kingdom["id"],
                           data["help_to_kingdom"], soldiers=amount)
     to_k = await get_kingdom(data["help_to_kingdom"])
-    await update_kingdom(data["help_to_kingdom"], soldiers=to_k["soldiers"] + amount)
+    to_ruler = await get_kingdom_ruler_vassal(to_k["id"])
+    if to_ruler:
+        await update_vassal(to_ruler["id"], soldiers=to_ruler["soldiers"] + amount)
     await state.clear()
     await message.answer(
         f"✅ {amount} askar {to_k['sigil']} {to_k['name']}ga yuborildi!",
@@ -447,14 +455,18 @@ async def msg_support_gold(message: Message, state: FSMContext, db_user: dict, b
         return
     data = await state.get_data()
     my_kingdom = await get_kingdom_by_king(message.from_user.id)
-    if my_kingdom["gold"] < amount:
-        await message.answer(f"❌ Yetarli oltin yo'q! Sizda: {my_kingdom['gold']}")
+    ruler = await get_kingdom_ruler_vassal(my_kingdom["id"]) if my_kingdom else None
+    if not ruler or ruler["gold"] < amount:
+        have = ruler["gold"] if ruler else 0
+        await message.answer(f"❌ Yetarli oltin yo'q! Sizda: {have}")
         return
-    await update_kingdom(my_kingdom["id"], gold=my_kingdom["gold"] - amount)
+    await update_vassal(ruler["id"], gold=ruler["gold"] - amount)
     await add_war_support(data["help_war_id"], "kingdom", my_kingdom["id"],
                           data["help_to_kingdom"], gold=amount)
     to_k = await get_kingdom(data["help_to_kingdom"])
-    await update_kingdom(data["help_to_kingdom"], gold=to_k["gold"] + amount)
+    to_ruler = await get_kingdom_ruler_vassal(to_k["id"])
+    if to_ruler:
+        await update_vassal(to_ruler["id"], gold=to_ruler["gold"] + amount)
     await state.clear()
     await message.answer(
         f"✅ {amount} oltin {to_k['sigil']} {to_k['name']}ga yuborildi!",
