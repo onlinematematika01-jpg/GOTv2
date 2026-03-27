@@ -13,7 +13,7 @@ from database.queries import (
     get_user, update_user, add_chronicle,
     get_kingdom_members, get_kingdom_vassals, get_vassal_members,
     get_all_prices, update_price, create_loan, get_all_active_loans,
-    repay_loan, get_loan, get_loans
+    repay_loan, get_loan, get_loans, get_kingdom_ruler_vassal
 )
 from keyboards.kb import admin_main_kb, admin_kingdoms_kb, admin_vassal_kingdom_kb, back_kb
 from config import ADMIN_IDS, KINGDOM_NAMES
@@ -1103,18 +1103,27 @@ async def msg_loan_interest(message: Message, state: FSMContext, bot: Bot):
     # Oltin berish
     if btype == "kingdom":
         obj = await get_kingdom(bid)
-        await update_kingdom(bid, gold=obj["gold"] + amount)
         obj_name = f"{obj['sigil']} {obj['name']}"
-        # Qirolga xabar
-        if obj["king_id"]:
+        # Qarz hukmdor vassalga beriladi
+        ruler = await get_kingdom_ruler_vassal(bid)
+        if ruler:
+            await update_vassal(ruler["id"], gold=ruler["gold"] + amount)
+            notify_id = ruler["lord_id"]
+            notify_msg = f"Oltin hukmdor vassal ({ruler['name']}) xazinasiga qo'shildi!"
+        else:
+            # Hukmdor vassal yo'q — qirollik xazinasiga (fallback)
+            await update_kingdom(bid, gold=obj["gold"] + amount)
+            notify_id = obj["king_id"]
+            notify_msg = "Oltin qirollik xazinasiga qo'shildi!"
+        if notify_id:
             try:
                 await bot.send_message(
-                    obj["king_id"],
+                    notify_id,
                     f"🏦 <b>Temir Bank qarzi!</b>\n\n"
                     f"💰 Miqdor: {amount} oltin\n"
                     f"📊 Foiz: {interest}%\n"
                     f"💸 Qaytarish: {total} oltin\n\n"
-                    f"Oltin xazinangizga qo'shildi!"
+                    f"{notify_msg}"
                 )
             except Exception:
                 pass
