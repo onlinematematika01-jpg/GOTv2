@@ -373,8 +373,82 @@ async def delete_artifact(artifact_id: int):
 
 
 async def get_kingdom_ruler_vassal(kingdom_id: int):
-    """Qirollikning hukmdor vassalini qaytaradi — eng kuchli vassal (soldiers + artifact)"""
-    return await get_strongest_vassal_in_kingdom(kingdom_id)
+    """Qirollikning hukmdor vassalini qaytaradi (hukmdor_vassal_id orqali)"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        kingdom = await conn.fetchrow("SELECT * FROM kingdoms WHERE id=$1", kingdom_id)
+        if not kingdom or not kingdom.get("hukmdor_vassal_id"):
+            return None
+        return await conn.fetchrow(
+            "SELECT * FROM vassals WHERE id=$1", kingdom["hukmdor_vassal_id"]
+        )
+
+
+async def set_hukmdor_vassal(kingdom_id: int, vassal_id: int):
+    """Hukmdor vassalni belgilash"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE kingdoms SET hukmdor_vassal_id=$1 WHERE id=$2",
+            vassal_id, kingdom_id
+        )
+
+
+async def create_hukmdor_claim(claimant_vassal_id: int, kingdom_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """INSERT INTO hukmdor_claims (claimant_vassal_id, kingdom_id, status)
+               VALUES ($1, $2, 'pending') RETURNING *""",
+            claimant_vassal_id, kingdom_id
+        )
+
+
+async def get_active_hukmdor_claim(kingdom_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """SELECT * FROM hukmdor_claims
+               WHERE kingdom_id=$1 AND status='pending'
+               ORDER BY created_at DESC LIMIT 1""",
+            kingdom_id
+        )
+
+
+async def get_hukmdor_claim(claim_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM hukmdor_claims WHERE id=$1", claim_id
+        )
+
+
+async def add_hukmdor_claim_response(claim_id: int, vassal_id: int, response: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO hukmdor_claim_responses (claim_id, vassal_id, response)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (claim_id, vassal_id) DO UPDATE SET response=$3""",
+            claim_id, vassal_id, response
+        )
+
+
+async def get_hukmdor_claim_responses(claim_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM hukmdor_claim_responses WHERE claim_id=$1", claim_id
+        )
+
+
+async def close_hukmdor_claim(claim_id: int, status: str = "completed"):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE hukmdor_claims SET status=$1 WHERE id=$2",
+            status, claim_id
+        )
 
 
 async def get_vassal_lord_user(vassal_id: int):
@@ -925,7 +999,7 @@ async def reset_all_users_for_new_game() -> list:
 
         # Qirolliklar: taxtlar bo'shatiladi, resurslar nolga tushadi
         await conn.execute(
-            "UPDATE kingdoms SET king_id=NULL, gold=0, soldiers=0, dragons=0"
+            "UPDATE kingdoms SET king_id=NULL, hukmdor_vassal_id=NULL, gold=0, soldiers=0, dragons=0"
         )
 
         # Vassallar: lordlar ozod qilinadi, resurslar nolga tushadi
@@ -939,6 +1013,8 @@ async def reset_all_users_for_new_game() -> list:
         )
 
         # O'yin tarixi jadvallarini tozalash
+        await conn.execute("DELETE FROM hukmdor_claim_responses")
+        await conn.execute("DELETE FROM hukmdor_claims")
         await conn.execute("DELETE FROM war_support")
         await conn.execute("DELETE FROM tributes")
         await conn.execute("DELETE FROM wars")
