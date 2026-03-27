@@ -10,7 +10,8 @@ from database.queries import (
     get_vassal_by_lord, get_vassal, get_vassal_members, update_vassal,
     get_kingdom, add_chronicle, get_user, cast_vote, get_votes,
     get_election_winner, get_all_kingdoms, update_kingdom,
-    update_user, get_all_vassals, has_executed_today
+    update_user, get_all_vassals, has_executed_today,
+    create_loan, get_loans
 )
 from keyboards.kb import lord_main_kb, back_kb, vassals_select_kb, kingdoms_select_kb
 from config import MIN_VASSAL_MEMBERS
@@ -22,6 +23,7 @@ class LordStates(StatesGroup):
     waiting_defect_kingdom = State()
     waiting_execute_confirm = State()
     waiting_dm_text = State()   # Oila a'zolariga shaxsiy xabar
+    waiting_loan_amount = State()  # Temir bank qarz so'rash
 
 
 def is_lord(db_user: dict) -> bool:
@@ -568,5 +570,95 @@ async def cb_execute_do(call: CallbackQuery, state: FSMContext, db_user: dict, b
     await call.message.edit_text(
         f"⚔️ <b>{target_name} qatl etildi.</b>\n\n"
         f"{transfer_text}",
+        reply_markup=lord_main_kb()
+    )
+
+
+# ── Temir Bank — Qarz so'rash (Lord) ─────────────────────────────────────────
+
+@router.callback_query(F.data == "lord_request_loan")
+async def cb_lord_request_loan(call: CallbackQuery, db_user: dict, state: FSMContext):
+    if not is_lord(db_user):
+        await call.answer("🛡️ Faqat Lordlar uchun!", show_alert=True)
+        return
+    vassal = await get_vassal_by_lord(call.from_user.id)
+    if not vassal:
+        await call.answer("❌ Vassal topilmadi!", show_alert=True)
+        return
+
+    # Joriy faol qarzlarni tekshirish
+    loans = await get_loans("vassal", vassal["id"])
+    active = [l for l in loans if l["status"] == "active"]
+    if active:
+        total_due = sum(l["total_due"] - l["paid"] for l in active)
+        await call.message.edit_text(
+            f"🏦 <b>Temir Bank</b>\n\n"
+            f"❌ Sizda hali to'lanmagan qarz bor!\n"
+            f"💸 Umumiy qarzdorlik: <b>{total_due} oltin</b>\n\n"
+            f"Avval joriy qarzingizni to'lang.",
+            reply_markup=back_kb("lord_main")
+        )
+        return
+
+    await state.set_state(LordStates.waiting_loan_amount)
+    await state.update_data(vassal_id=vassal["id"], vassal_gold=vassal["gold"])
+    await call.message.edit_text(
+        f"🏦 <b>Temir Bank — Qarz so'rash</b>\n\n"
+        f"💰 Oila xazinasi: <b>{vassal['gold']} oltin</b>\n\n"
+        f"📋 Shartlar:\n"
+        f"• Foiz: 20%\n"
+        f"• To'lov muddati: 7 kun\n\n"
+        f"Qancha oltin qarz olmoqchisiz?\n"
+        f"<i>(Minimal: 50, Maksimal: 5000)</i>",
+        reply_markup=back_kb("lord_main")
+    )
+
+
+@router.message(LordStates.waiting_loan_amount)
+async def msg_loan_amount(message: Message, state: FSMContext, db_user: dict):
+    try:
+        amount = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Raqam kiriting!")
+        return
+
+    if amount < 50:
+        await message.answer("❌ Minimal qarz miqdori: 50 oltin")
+        return
+    if amount > 5000:
+        await message.answer("❌ Maksimal qarz miqdori: 5000 oltin")
+        return
+
+    data = await state.get_data()
+    vassal_id = data.get("vassal_id")
+    vassal = await get_vassal(vassal_id)
+    if not vassal:
+        await state.clear()
+        await message.answer("❌ Vassal topilmadi!")
+        return
+
+    interest = amount * 20 // 100
+    total_due = amount + interest
+    from datetime import datetime, timedelta
+    due_date = datetime.utcnow() + timedelta(days=7)
+
+    await create_loan("vassal", vassal_id, amount, interest, total_due, due_date)
+    await update_vassal(vassal_id, gold=vassal["gold"] + amount)
+    await state.clear()
+
+    await add_chronicle(
+        "loan", "🏦 Qarz olindi",
+        f"{vassal['name']} oilasi Temir Bankdan {amount} oltin qarz oldi. "
+        f"Qaytarish: {total_due} oltin (7 kun ichida).",
+        actor_id=message.from_user.id
+    )
+    from keyboards.kb import lord_main_kb
+    await message.answer(
+        f"🏦 <b>Temir Bank qarz berdi!</b>\n\n"
+        f"💰 Qarz: <b>{amount} oltin</b>\n"
+        f"📈 Foiz (20%): <b>{interest} oltin</b>\n"
+        f"💸 Qaytarish: <b>{total_due} oltin</b>\n"
+        f"📅 Muddati: 7 kun\n\n"
+        f"Oltin oila xazinasiga qo'shildi!",
         reply_markup=lord_main_kb()
     )
