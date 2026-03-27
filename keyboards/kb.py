@@ -12,6 +12,7 @@ def admin_main_kb(game_active: bool = True) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="🏰 Standart 7 qirollik yaratish", callback_data="admin_create_kingdoms"))
     builder.row(InlineKeyboardButton(text="⚙️ Qirolliklar boshqaruvi", callback_data="admin_manage_kingdoms"))
     builder.row(InlineKeyboardButton(text="👑 Qirol tayinlash", callback_data="admin_assign_king"))
+    builder.row(InlineKeyboardButton(text="🛡️ Lord tayinlash", callback_data="admin_assign_lord"))
     builder.row(InlineKeyboardButton(text="🛡️ Vassal oila qo'shish", callback_data="admin_add_vassal"))
     builder.row(InlineKeyboardButton(text="🗑️ Vassal oila o'chirish", callback_data="admin_delete_house"))
     builder.row(InlineKeyboardButton(text="📜 Xronikaga yozish", callback_data="admin_write_chronicle"))
