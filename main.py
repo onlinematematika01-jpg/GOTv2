@@ -10,7 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN
 from database.db import init_db
-from handlers import admin, king, lord, member, common, assassination, war, help, rating, claim
+from handlers import admin, king, lord, member, common, assassination, war, help, rating, claim, hukmdor
 from handlers.war import process_weekly_tributes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from middlewares.auth import AuthMiddleware
@@ -45,6 +45,7 @@ async def main():
     dp.include_router(help.router)
     dp.include_router(rating.router)
     dp.include_router(claim.router)
+    dp.include_router(hukmdor.router)
 
     # Haftalik tribute scheduler
     scheduler = AsyncIOScheduler(timezone='Asia/Tashkent')
