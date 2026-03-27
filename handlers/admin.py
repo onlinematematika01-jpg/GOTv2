@@ -13,7 +13,8 @@ from database.queries import (
     get_user, update_user, add_chronicle,
     get_kingdom_members, get_kingdom_vassals, get_vassal_members,
     get_all_prices, update_price, create_loan, get_all_active_loans,
-    repay_loan, get_loan, get_loans, get_kingdom_ruler_vassal
+    repay_loan, get_loan, get_loans, get_kingdom_ruler_vassal,
+    reset_all_users_for_new_game
 )
 from keyboards.kb import admin_main_kb, admin_kingdoms_kb, admin_vassal_kingdom_kb, back_kb
 from config import ADMIN_IDS, KINGDOM_NAMES
@@ -1293,6 +1294,82 @@ async def cb_pause_game(call: CallbackQuery, bot: Bot):
         "system", "⏸️ O'yin to'xtatildi",
         "Admin tomonidan o'yin vaqtincha to'xtatildi",
         actor_id=call.from_user.id, bot=bot
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  O'YINCHILAR BAZASINI TOZALASH
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "admin_reset_confirm")
+async def cb_reset_confirm(call: CallbackQuery):
+    """Tasdiqlash so'rovi — ikki qadam xavfsizlik"""
+    if not is_admin(call.from_user.id):
+        await call.answer("🚫 Ruxsat yo'q!")
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Ha, tozalash", callback_data="admin_reset_do"),
+        InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_main")
+    )
+    await call.message.edit_text(
+        "⚠️ <b>DIQQAT! Bu amalni qaytarib bo'lmaydi!</b>\n\n"
+        "🔄 <b>O'yinchilar bazasini tozalash</b> quyidagilarni bajaradi:\n\n"
+        "• Barcha o'yinchilar (admindan tashqari) <b>member</b> rolga qaytariladi\n"
+        "• Qirollik, vassal birikmalari <b>o'chiriladi</b>\n"
+        "• Barcha resurslar (oltin, askar) <b>nolga tushadi</b>\n"
+        "• Urushlar, diplomatiya, da'vogarliklar <b>tozalanadi</b>\n"
+        "• Navbat tizimi <b>qayta boshidan</b> boshlanadi\n"
+        "• Har bir o'yinchiga <b>qayta qo'shilish xabari</b> yuboriladi\n\n"
+        "Davom etasizmi?",
+        reply_markup=builder.as_markup()
+    )
+
+
+@router.callback_query(F.data == "admin_reset_do")
+async def cb_reset_do(call: CallbackQuery, bot: Bot):
+    """Bazani haqiqatda tozalash va o'yinchilarga xabar yuborish"""
+    if not is_admin(call.from_user.id):
+        await call.answer("🚫 Ruxsat yo'q!")
+        return
+
+    await call.message.edit_text("⏳ <b>Baza tozalanmoqda...</b> Iltimos kuting.")
+
+    # Bazani tozalash — telegram_id lar ro'yxati qaytariladi
+    telegram_ids = await reset_all_users_for_new_game()
+
+    # Har bir o'yinchiga qayta qo'shilish xabari yuborish
+    sent = 0
+    failed = 0
+    for tg_id in telegram_ids:
+        try:
+            await bot.send_message(
+                tg_id,
+                "🔄 <b>O'yin yangi bosqichga o'tdi!</b>\n\n"
+                "⚔️ Admin barcha o'yinchilar bazasini yangiladi.\n\n"
+                "Siz hozir erkin holatdasiz — hech qaysi qirollik yoki vassalga\n"
+                "biriktirilmadingiz.\n\n"
+                "▶️ O'yinga qayta qo'shilish uchun /start bosing!",
+            )
+            sent += 1
+        except Exception:
+            failed += 1
+
+    await add_chronicle(
+        "system",
+        "🔄 Baza tozalandi",
+        f"Admin tomonidan {len(telegram_ids)} o'yinchi yangi o'yin uchun reset qilindi.",
+        actor_id=call.from_user.id
+    )
+
+    await call.message.edit_text(
+        f"✅ <b>Baza muvaffaqiyatli tozalandi!</b>\n\n"
+        f"👥 Jami o'yinchilar: <b>{len(telegram_ids)}</b>\n"
+        f"📨 Xabar yuborildi: <b>{sent}</b>\n"
+        f"❌ Xatolik: <b>{failed}</b>\n\n"
+        f"O'yinchilar /start bosganda avtomatik qayta ro'yxatga olinadi.",
+        reply_markup=admin_main_kb()
     )
 
 
