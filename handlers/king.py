@@ -11,7 +11,7 @@ from database.queries import (
     get_kingdom_by_king, get_kingdom, get_kingdom_vassals, get_vassal,
     get_kingdom_members, update_kingdom, update_vassal, get_user, update_user,
     add_chronicle, create_diplomacy, update_diplomacy, get_pending_diplomacy,
-    get_all_kingdoms, get_vassal_members
+    get_all_kingdoms, get_vassal_members, get_kingdom_ruler_vassal
 )
 from keyboards.kb import (
     king_main_kb, diplomacy_kb, kingdoms_select_kb, vassals_select_kb,
@@ -69,18 +69,24 @@ async def cb_king_status(call: CallbackQuery, db_user: dict):
         return
     vassals = await get_kingdom_vassals(kingdom["id"])
     members = await get_kingdom_members(kingdom["id"])
+    ruler = await get_kingdom_ruler_vassal(kingdom["id"])
 
     text = f"{kingdom['sigil']} <b>{kingdom['name']} Qirollik Holati</b>\n\n"
-    text += f"💰 Oltin: {kingdom['gold']}\n"
-    text += f"⚔️ Qo'shin: {kingdom['soldiers']}\n"
-    text += f"🐉 Ajdarlar: {kingdom['dragons']}\n"
+    if ruler:
+        text += f"👑 Hukmdor: <b>{ruler['name']}</b>\n"
+        text += f"💰 Hukmdor xazinasi: {ruler['gold']} oltin\n"
+        text += f"⚔️ Hukmdor qo'shini: {ruler['soldiers']} askar\n"
+    else:
+        text += f"⚠️ Hukmdor vassal yo'q\n"
     text += f"👥 Jami a'zolar: {len(members)}\n"
     text += f"🛡️ Vassal oilalar: {len(vassals)}\n\n"
 
     for v in vassals:
         lord_mark = "👑 Lord" if v["lord_id"] else "❌ Lodsiz"
+        is_ruler = ruler and ruler["id"] == v["id"]
+        ruler_mark = " 👑Hukmdor" if is_ruler else ""
         vmembers = await get_vassal_members(v["id"])
-        text += f"  🛡️ <b>{v['name']}</b> — {lord_mark} | 💰 {v['gold']} | 👥 {len(vmembers)} a'zo\n"
+        text += f"  🛡️ <b>{v['name']}</b>{ruler_mark} — {lord_mark} | 💰 {v['gold']} | 👥 {len(vmembers)} a'zo\n"
 
     await call.message.edit_text(text, reply_markup=back_kb("king_main"))
 
