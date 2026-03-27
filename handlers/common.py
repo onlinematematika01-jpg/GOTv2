@@ -42,18 +42,15 @@ async def cmd_start(message: Message, db_user: dict):
     user = db_user
     role = user.get("role", "member")
 
-    # Queue: yangi user YOKI vassali o'chirilgan user
+    # Yangi user YOKI reset qilingan user — vassali yo'q
     if role == "member" and not user.get("vassal_id"):
         result = await assign_user_to_slot(message.from_user.id)
         if "error" not in result:
-            phase = result.get("phase", 1)
-            if phase == 1:
-                place = f"<b>{result.get('kingdom', '?')}</b> qirolligiga"
-            else:
-                place = f"<b>{result.get('vassal', '?')}</b> vassal oilasiga"
+            vassal_name = result.get("vassal", "?")
             await message.answer(
                 f"⚔️ Xush kelibsiz, <b>{message.from_user.full_name}</b>!\n\n"
-                f"Siz {place} joylashtirildinqiz.\n\n" + GOT_WELCOME,
+                f"Siz <b>{vassal_name}</b> vassal oilasiga biriktirildinqiz.\n\n"
+                + GOT_WELCOME,
                 reply_markup=member_main_kb()
             )
             await add_chronicle(
