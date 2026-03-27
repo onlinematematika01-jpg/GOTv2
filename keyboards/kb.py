@@ -67,7 +67,6 @@ def king_main_kb() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="📣 Farmon chiqarish", callback_data="king_decree"))
     builder.row(InlineKeyboardButton(text="💬 Lordlarga shaxsiy xabar", callback_data="king_send_dm"))
     builder.row(InlineKeyboardButton(text="💰 Resurs talab qilish", callback_data="king_request_resources"))
-    builder.row(InlineKeyboardButton(text="⚔️ Jazo berish", callback_data="king_punish"))
     builder.row(InlineKeyboardButton(text="🤝 Diplomatiya", callback_data="king_diplomacy"))
     builder.row(InlineKeyboardButton(text="📊 Qirollik holati", callback_data="king_status"))
     builder.row(InlineKeyboardButton(text="⚔️ Urush holati", callback_data="king_war_status"))
